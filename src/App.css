@@ -62,35 +62,25 @@
   letter-spacing: 0.08em;
 }
 
-.crosshair {
-  border: 1px solid rgba(234, 247, 255, 0.9);
+.scope-overlay {
+  background:
+    linear-gradient(90deg, transparent calc(50% - 1px), rgba(210, 249, 255, 0.65) 50%, transparent calc(50% + 1px)),
+    linear-gradient(transparent calc(50% - 1px), rgba(210, 249, 255, 0.65) 50%, transparent calc(50% + 1px)),
+    radial-gradient(circle at center, transparent 0 29%, rgba(0, 5, 9, 0.92) 30% 100%);
+  inset: 0;
+  position: absolute;
+}
+
+.scope-overlay::before {
+  border: 2px solid rgba(210, 249, 255, 0.75);
   border-radius: 50%;
-  height: 14px;
-  left: 50%;
-  position: absolute;
-  top: 50%;
-  transform: translate(-50%, -50%);
-  width: 14px;
-}
-
-.crosshair::before,
-.crosshair::after {
-  background: #eaf7ff;
   content: "";
+  height: min(58vw, 58vh);
   left: 50%;
   position: absolute;
   top: 50%;
   transform: translate(-50%, -50%);
-}
-
-.crosshair::before {
-  height: 1px;
-  width: 24px;
-}
-
-.crosshair::after {
-  height: 24px;
-  width: 1px;
+  width: min(58vw, 58vh);
 }
 
 .lock-status {

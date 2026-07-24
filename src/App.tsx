@@ -1,7 +1,7 @@
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { Html, Line } from "@react-three/drei";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Raycaster, Vector2, Vector3 } from "three";
+import { PerspectiveCamera, Raycaster, Vector2, Vector3 } from "three";
 import type { Group, Object3D } from "three";
 import "./App.css";
 
@@ -83,9 +83,11 @@ function loadLeaderboard(): LeaderboardEntry[] {
 
 function PlayerController({
   active,
+  aiming,
   gameId,
 }: {
   active: boolean;
+  aiming: boolean;
   gameId: number;
 }) {
   const { camera, gl } = useThree();
@@ -124,6 +126,12 @@ function PlayerController({
   }, [active, camera, gl]);
 
   useFrame((_, delta) => {
+    if (camera instanceof PerspectiveCamera) {
+      const targetFov = active && aiming ? 34 : 72;
+      camera.fov += (targetFov - camera.fov) * Math.min(delta * 12, 1);
+      camera.updateProjectionMatrix();
+    }
+
     if (!active || document.pointerLockElement !== gl.domElement) {
       return;
     }
@@ -146,6 +154,51 @@ function PlayerController({
   });
 
   return null;
+}
+
+function WeaponView({ active, aiming }: { active: boolean; aiming: boolean }) {
+  const { camera } = useThree();
+  const weapon = useRef<Group>(null);
+  const offset = useMemo(() => new Vector3(), []);
+
+  useFrame(() => {
+    if (!weapon.current) {
+      return;
+    }
+
+    weapon.current.visible = active && !aiming;
+    offset
+      .set(0.52, -0.46, -1.05)
+      .applyQuaternion(camera.quaternion)
+      .add(camera.position);
+    weapon.current.position.copy(offset);
+    weapon.current.quaternion.copy(camera.quaternion);
+  });
+
+  return (
+    <group ref={weapon}>
+      <mesh position={[0.08, -0.08, -0.15]}>
+        <boxGeometry args={[0.42, 0.28, 0.86]} />
+        <meshStandardMaterial color="#1b2d39" metalness={0.8} roughness={0.3} />
+      </mesh>
+      <mesh position={[0.08, 0.04, -0.92]}>
+        <boxGeometry args={[0.14, 0.14, 1.15]} />
+        <meshStandardMaterial color="#101a22" metalness={0.95} roughness={0.22} />
+      </mesh>
+      <mesh position={[-0.04, -0.32, 0.12]} rotation={[0.24, 0, 0]}>
+        <boxGeometry args={[0.22, 0.48, 0.3]} />
+        <meshStandardMaterial color="#18242c" metalness={0.6} roughness={0.4} />
+      </mesh>
+      <mesh position={[0.02, 0.24, -0.28]} rotation={[Math.PI / 2, 0, 0]}>
+        <cylinderGeometry args={[0.15, 0.15, 0.62, 20]} />
+        <meshStandardMaterial color="#111d26" metalness={0.9} roughness={0.2} />
+      </mesh>
+      <mesh position={[0.02, 0.24, -0.6]}>
+        <circleGeometry args={[0.1, 20]} />
+        <meshBasicMaterial color="#67dbff" />
+      </mesh>
+    </group>
+  );
 }
 
 function TrainingRange() {
@@ -367,17 +420,23 @@ function Shooter({
   active,
   onTargetHit,
   onShot,
+  onAimChange,
 }: {
   active: boolean;
   onTargetHit: (hit: TargetHit) => void;
   onShot: (shot: Omit<Shot, "id">) => void;
+  onAimChange: (aiming: boolean) => void;
 }) {
   const { camera, gl, scene } = useThree();
   const raycaster = useMemo(() => new Raycaster(), []);
 
   useEffect(() => {
-    const shoot = () => {
-      if (!active || document.pointerLockElement !== gl.domElement) {
+    const shoot = (event: PointerEvent) => {
+      if (
+        event.button !== 0 ||
+        !active ||
+        document.pointerLockElement !== gl.domElement
+      ) {
         return;
       }
 
@@ -410,9 +469,34 @@ function Shooter({
       }
     };
 
+    const startAiming = (event: PointerEvent) => {
+      if (
+        event.button === 2 &&
+        active &&
+        document.pointerLockElement === gl.domElement
+      ) {
+        event.preventDefault();
+        onAimChange(true);
+      }
+    };
+    const stopAiming = (event: PointerEvent) => {
+      if (event.button === 2) {
+        onAimChange(false);
+      }
+    };
+    const preventContextMenu = (event: MouseEvent) => event.preventDefault();
+
     gl.domElement.addEventListener("pointerdown", shoot);
-    return () => gl.domElement.removeEventListener("pointerdown", shoot);
-  }, [active, camera, gl, onShot, onTargetHit, raycaster, scene]);
+    gl.domElement.addEventListener("pointerdown", startAiming);
+    gl.domElement.addEventListener("contextmenu", preventContextMenu);
+    window.addEventListener("pointerup", stopAiming);
+    return () => {
+      gl.domElement.removeEventListener("pointerdown", shoot);
+      gl.domElement.removeEventListener("pointerdown", startAiming);
+      gl.domElement.removeEventListener("contextmenu", preventContextMenu);
+      window.removeEventListener("pointerup", stopAiming);
+    };
+  }, [active, camera, gl, onAimChange, onShot, onTargetHit, raycaster, scene]);
 
   return null;
 }
@@ -430,6 +514,7 @@ function findTargetRoot(object: Object3D): Object3D | null {
 
 function GameScene({
   active,
+  aiming,
   gameId,
   rounds,
   shot,
@@ -438,8 +523,10 @@ function GameScene({
   onTargetExpire,
   onShot,
   onExplosionComplete,
+  onAimChange,
 }: {
   active: boolean;
+  aiming: boolean;
   gameId: number;
   rounds: Record<number, number>;
   shot: Shot | null;
@@ -448,11 +535,13 @@ function GameScene({
   onTargetExpire: (id: number) => void;
   onShot: (shot: Omit<Shot, "id">) => void;
   onExplosionComplete: (effectId: string) => void;
+  onAimChange: (aiming: boolean) => void;
 }) {
   return (
     <>
-      <PlayerController active={active} gameId={gameId} />
+      <PlayerController active={active} aiming={aiming} gameId={gameId} />
       <TrainingRange />
+      <WeaponView active={active} aiming={aiming} />
       {TARGETS.map((spawn) => (
         <Target
           key={spawn.id}
@@ -470,7 +559,12 @@ function GameScene({
           onComplete={onExplosionComplete}
         />
       ))}
-      <Shooter active={active} onTargetHit={onTargetHit} onShot={onShot} />
+      <Shooter
+        active={active}
+        onTargetHit={onTargetHit}
+        onShot={onShot}
+        onAimChange={onAimChange}
+      />
     </>
   );
 }
@@ -479,6 +573,7 @@ function App() {
   const [status, setStatus] = useState<GameStatus>("ready");
   const [health, setHealth] = useState(MAX_HEALTH);
   const [score, setScore] = useState(0);
+  const [aiming, setAiming] = useState(false);
   const [gameId, setGameId] = useState(0);
   const [locked, setLocked] = useState(false);
   const [rounds, setRounds] = useState<Record<number, number>>({
@@ -504,6 +599,9 @@ function App() {
   useEffect(() => {
     const onPointerLockChange = () => {
       setLocked(document.pointerLockElement === canvas.current);
+      if (document.pointerLockElement !== canvas.current) {
+        setAiming(false);
+      }
     };
     document.addEventListener("pointerlockchange", onPointerLockChange);
     return () => document.removeEventListener("pointerlockchange", onPointerLockChange);
@@ -512,6 +610,9 @@ function App() {
   useEffect(() => {
     if (!active && document.pointerLockElement === canvas.current) {
       document.exitPointerLock();
+    }
+    if (!active) {
+      setAiming(false);
     }
   }, [active]);
 
@@ -551,6 +652,7 @@ function App() {
     window.localStorage.setItem(PLAYER_NAME_STORAGE_KEY, normalizedName);
     setHealth(MAX_HEALTH);
     setScore(0);
+    setAiming(false);
     setShot(null);
     setExplosions([]);
     setRounds({ 1: 0, 2: 0, 3: 0, 4: 0 });
@@ -610,6 +712,7 @@ function App() {
       >
         <GameScene
           active={active}
+          aiming={aiming}
           gameId={gameId}
           rounds={rounds}
           shot={shot}
@@ -618,6 +721,7 @@ function App() {
           onTargetExpire={targetExpired}
           onShot={recordShot}
           onExplosionComplete={removeExplosion}
+          onAimChange={setAiming}
         />
       </Canvas>
 
@@ -629,7 +733,7 @@ function App() {
         </div>
         {active && (
           <>
-            <div className="crosshair" aria-hidden="true" />
+            {aiming && <div className="scope-overlay" aria-hidden="true" />}
             <p className="lock-status">{locked ? "Range live" : "Click the range to resume"}</p>
           </>
         )}
@@ -669,7 +773,7 @@ function App() {
                 {status === "game-over" ? "Restart range" : "Enter range"}
               </button>
             </form>
-            <p className="controls-copy">WASD to move · Mouse to look · Click to fire</p>
+            <p className="controls-copy">WASD to move · Mouse to look · Click to fire · Hold right-click to scope</p>
             <section className="leaderboard" aria-labelledby="leaderboard-title">
               <h2 id="leaderboard-title">Local leaderboard</h2>
               {leaderboard.length === 0 ? (
