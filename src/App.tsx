@@ -1,5 +1,5 @@
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
-import { Html } from "@react-three/drei";
+import { Html, Line } from "@react-three/drei";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Raycaster, Vector2, Vector3 } from "three";
 import type { Group, Object3D } from "three";
@@ -12,17 +12,29 @@ type TargetSpawn = {
   phase: number;
   color: string;
 };
-type Shot = { id: number; point: [number, number, number] };
+type Shot = {
+  id: number;
+  origin: [number, number, number];
+  point: [number, number, number];
+};
 type TargetHit = {
   id: number;
   point: [number, number, number];
   color: string;
 };
 type Explosion = TargetHit & { effectId: string; points: number };
+type LeaderboardEntry = {
+  name: string;
+  score: number;
+  recordedAt: number;
+};
 
 const MAX_HEALTH = 100;
 const BULLSEYE_RADIUS = 0.28;
 const BULLSEYE_POINTS = 250;
+const PLAYER_NAME_STORAGE_KEY = "range-zero-player-name";
+const LEADERBOARD_STORAGE_KEY = "range-zero-leaderboard";
+const LEADERBOARD_LIMIT = 8;
 const TARGET_COLORS = ["#ff5a5f", "#ffd166", "#52d6ff", "#ab7cff", "#54e6a8", "#ff8fdb"];
 const TARGETS: TargetSpawn[] = [
   { id: 1, position: [-8, 2.6, -13], phase: 0.2, color: "#ff5a5f" },
@@ -37,6 +49,36 @@ function clamp(value: number, min: number, max: number) {
 
 function getTargetColor(spawn: TargetSpawn, round: number) {
   return TARGET_COLORS[(spawn.id + round - 1) % TARGET_COLORS.length];
+}
+
+function isLeaderboardEntry(value: unknown): value is LeaderboardEntry {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const entry = value as Record<string, unknown>;
+  return (
+    typeof entry.name === "string" &&
+    typeof entry.score === "number" &&
+    typeof entry.recordedAt === "number"
+  );
+}
+
+function loadLeaderboard(): LeaderboardEntry[] {
+  const savedEntries = window.localStorage.getItem(LEADERBOARD_STORAGE_KEY);
+  if (!savedEntries) {
+    return [];
+  }
+
+  try {
+    const parsedEntries: unknown = JSON.parse(savedEntries);
+    return Array.isArray(parsedEntries)
+      ? parsedEntries.filter(isLeaderboardEntry).slice(0, LEADERBOARD_LIMIT)
+      : [];
+  } catch (error) {
+    console.warn("Unable to load the local leaderboard.", error);
+    return [];
+  }
 }
 
 function PlayerController({
@@ -302,12 +344,21 @@ function ShotEffect({ shot }: { shot: Shot | null }) {
   }
 
   return (
-    <group ref={flash} position={shot.point}>
-      <mesh>
-        <sphereGeometry args={[0.24, 16, 16]} />
-        <meshBasicMaterial color="#ffffff" />
-      </mesh>
-      <pointLight color="#6ed6ff" intensity={8} distance={4} />
+    <group ref={flash}>
+      <Line
+        points={[shot.origin, shot.point]}
+        color="#9cf2ff"
+        lineWidth={2.5}
+        transparent
+        opacity={0.9}
+      />
+      <group position={shot.point}>
+        <mesh>
+          <sphereGeometry args={[0.24, 16, 16]} />
+          <meshBasicMaterial color="#ffffff" />
+        </mesh>
+        <pointLight color="#6ed6ff" intensity={8} distance={4} />
+      </group>
     </group>
   );
 }
@@ -319,7 +370,7 @@ function Shooter({
 }: {
   active: boolean;
   onTargetHit: (hit: TargetHit) => void;
-  onShot: (point: [number, number, number]) => void;
+  onShot: (shot: Omit<Shot, "id">) => void;
 }) {
   const { camera, gl, scene } = useThree();
   const raycaster = useMemo(() => new Raycaster(), []);
@@ -339,7 +390,11 @@ function Shooter({
       const point = hit
         ? hit.point
         : raycaster.ray.at(30, new Vector3());
-      onShot([point.x, point.y, point.z]);
+      const origin = camera.getWorldPosition(new Vector3());
+      onShot({
+        origin: [origin.x, origin.y, origin.z],
+        point: [point.x, point.y, point.z],
+      });
 
       const targetRoot = hit ? findTargetRoot(hit.object) : null;
       if (hit && targetRoot) {
@@ -391,7 +446,7 @@ function GameScene({
   explosions: Explosion[];
   onTargetHit: (hit: TargetHit) => void;
   onTargetExpire: (id: number) => void;
-  onShot: (point: [number, number, number]) => void;
+  onShot: (shot: Omit<Shot, "id">) => void;
   onExplosionComplete: (effectId: string) => void;
 }) {
   return (
@@ -434,8 +489,15 @@ function App() {
   });
   const [shot, setShot] = useState<Shot | null>(null);
   const [explosions, setExplosions] = useState<Explosion[]>([]);
+  const [playerName, setPlayerName] = useState(
+    () => window.localStorage.getItem(PLAYER_NAME_STORAGE_KEY) ?? "",
+  );
+  const [nameError, setNameError] = useState("");
+  const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>(loadLeaderboard);
   const canvas = useRef<HTMLCanvasElement | null>(null);
   const explosionSequence = useRef(0);
+  const completedGame = useRef(-1);
+  const leaderboardRef = useRef(leaderboard);
 
   const active = status === "playing";
 
@@ -459,7 +521,34 @@ function App() {
     }
   }, [health, status]);
 
+  useEffect(() => {
+    if (status !== "game-over" || completedGame.current === gameId || !playerName) {
+      return;
+    }
+
+    completedGame.current = gameId;
+    const nextLeaderboard = [
+      ...leaderboardRef.current,
+      { name: playerName, score, recordedAt: Date.now() },
+    ]
+      .sort((left, right) => right.score - left.score || left.recordedAt - right.recordedAt)
+      .slice(0, LEADERBOARD_LIMIT);
+
+    leaderboardRef.current = nextLeaderboard;
+    window.localStorage.setItem(LEADERBOARD_STORAGE_KEY, JSON.stringify(nextLeaderboard));
+    setLeaderboard(nextLeaderboard);
+  }, [gameId, playerName, score, status]);
+
   const startGame = () => {
+    const normalizedName = playerName.trim().slice(0, 16);
+    if (!normalizedName) {
+      setNameError("Enter a callsign to enter the range.");
+      return;
+    }
+
+    setPlayerName(normalizedName);
+    setNameError("");
+    window.localStorage.setItem(PLAYER_NAME_STORAGE_KEY, normalizedName);
     setHealth(MAX_HEALTH);
     setScore(0);
     setShot(null);
@@ -500,8 +589,8 @@ function App() {
     });
   };
 
-  const recordShot = (point: [number, number, number]) => {
-    setShot((current) => ({ id: (current?.id ?? 0) + 1, point }));
+  const recordShot = (shot: Omit<Shot, "id">) => {
+    setShot((current) => ({ id: (current?.id ?? 0) + 1, ...shot }));
   };
 
   const removeExplosion = (effectId: string) => {
@@ -556,10 +645,46 @@ function App() {
                 ? `Final score: ${score}. Reinitialize the range to try again.`
                 : "Clear moving targets before they drain your hull integrity."}
             </p>
-            <button type="button" onClick={startGame}>
-              {status === "game-over" ? "Restart range" : "Enter range"}
-            </button>
+            <form
+              className="player-form"
+              onSubmit={(event) => {
+                event.preventDefault();
+                startGame();
+              }}
+            >
+              <label htmlFor="player-name">Callsign</label>
+              <input
+                id="player-name"
+                value={playerName}
+                maxLength={16}
+                autoComplete="nickname"
+                onChange={(event) => {
+                  setPlayerName(event.target.value);
+                  setNameError("");
+                }}
+                placeholder="Enter your name"
+              />
+              {nameError && <p className="name-error">{nameError}</p>}
+              <button type="submit">
+                {status === "game-over" ? "Restart range" : "Enter range"}
+              </button>
+            </form>
             <p className="controls-copy">WASD to move · Mouse to look · Click to fire</p>
+            <section className="leaderboard" aria-labelledby="leaderboard-title">
+              <h2 id="leaderboard-title">Local leaderboard</h2>
+              {leaderboard.length === 0 ? (
+                <p className="empty-leaderboard">Complete a run to set the first score.</p>
+              ) : (
+                <ol>
+                  {leaderboard.map((entry, index) => (
+                    <li key={`${entry.recordedAt}-${index}`}>
+                      <span>{entry.name}</span>
+                      <strong>{entry.score}</strong>
+                    </li>
+                  ))}
+                </ol>
+              )}
+            </section>
           </div>
         </section>
       )}
