@@ -431,7 +431,7 @@ function Shooter({
   const raycaster = useMemo(() => new Raycaster(), []);
 
   useEffect(() => {
-    const shoot = (event: PointerEvent) => {
+    const shoot = (event: MouseEvent) => {
       if (
         event.button !== 0 ||
         !active ||
@@ -469,7 +469,7 @@ function Shooter({
       }
     };
 
-    const startAiming = (event: PointerEvent) => {
+    const startAiming = (event: MouseEvent) => {
       if (
         event.button === 2 &&
         active &&
@@ -479,22 +479,22 @@ function Shooter({
         onAimChange(true);
       }
     };
-    const stopAiming = (event: PointerEvent) => {
+    const stopAiming = (event: MouseEvent) => {
       if (event.button === 2) {
         onAimChange(false);
       }
     };
     const preventContextMenu = (event: MouseEvent) => event.preventDefault();
 
-    gl.domElement.addEventListener("pointerdown", shoot);
-    gl.domElement.addEventListener("pointerdown", startAiming);
+    gl.domElement.addEventListener("mousedown", shoot);
+    gl.domElement.addEventListener("mousedown", startAiming);
     gl.domElement.addEventListener("contextmenu", preventContextMenu);
-    window.addEventListener("pointerup", stopAiming);
+    window.addEventListener("mouseup", stopAiming);
     return () => {
-      gl.domElement.removeEventListener("pointerdown", shoot);
-      gl.domElement.removeEventListener("pointerdown", startAiming);
+      gl.domElement.removeEventListener("mousedown", shoot);
+      gl.domElement.removeEventListener("mousedown", startAiming);
       gl.domElement.removeEventListener("contextmenu", preventContextMenu);
-      window.removeEventListener("pointerup", stopAiming);
+      window.removeEventListener("mouseup", stopAiming);
     };
   }, [active, camera, gl, onAimChange, onShot, onTargetHit, raycaster, scene]);
 
